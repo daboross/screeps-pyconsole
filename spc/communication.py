@@ -130,8 +130,8 @@ class ActiveConnection:
             raise ValueError("Non-OK result from getting user info: {}".format(info_json))
         self._user_id = info_json['_id']
         interface.output_text("Found user ID: {}".format(self._user_id))
-        if 'token' in info_json:
-            self._token = info_json['token']
+        if 'X-Token' in info_result.headers:
+            self._token = info_result.headers['X-Token']
 
     async def send_command(self, text):
         if not self._ready:
@@ -156,14 +156,15 @@ class ActiveConnection:
         if not result.ok:
             result_json = result.json()
             if result_json and result_json.get('error') == 'unauthorized' and retry > 0:
+                interface.output_text("token expired, retrying")
                 await self._login()
-                await self._send_command_call(text, retry=retry - 1)
+                return await self._send_command_call(text, retry=retry - 1)
             interface.output_text("failed to send command: {} {}:\n{}".format(result.status_code,
                                                                               result.reason, result.text))
             return
         result_json = result.json()
-        if 'token' in result_json:
-            self._token = result_json['token']
+        if 'X-Token' in result.headers:
+            self._token = result.headers['X-Token']
         if not result_json.get('ok'):
             if result_json.get('error') == 'unauthorized' and retry > 0:
                 await self._login()
