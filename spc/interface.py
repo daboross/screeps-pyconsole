@@ -1,7 +1,8 @@
 import asyncio
 import readline
-
 from time import strftime
+
+from spc import autocompletion
 
 
 def output_text(text):
@@ -14,11 +15,7 @@ def output_text(text):
 
 
 def _completion(word, state):
-    """
-    Stub function, should probably be moved to a separate module when actually implemented.
-    """
-    _words = []
-    matches = [w for w in _words if w.startswith(word)]
+    matches = autocompletion.completions_for(word)
     if state < len(matches):
         return matches[state]
 

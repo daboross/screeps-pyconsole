@@ -5,7 +5,7 @@ import functools
 import requests
 import websockets
 
-from spc import interface
+from spc import interface, autocompletion
 
 DEFAULT_WS_URL = 'wss://screeps.com/socket/websocket'
 DEFAULT_API_URL = 'https://screeps.com/api'
@@ -39,6 +39,9 @@ class ActiveConnection:
         self._connection = await websockets.connect(self._ws_url, loop=self._loop)
         if self._connection is None:
             raise ValueError("Failed to initiate websockets connection.")
+        if self._done:
+            self._connection.close()
+            return
 
         if self._token is None:
             await self._login()
@@ -76,24 +79,31 @@ class ActiveConnection:
                         # TODO: abstract out this monstrosity
                         for general_type, stuff in message_json[1].items():
                             if isinstance(stuff, str):
-                                if len(stuff):
-                                    if stuff.startswith('['):
-                                        interface.output_text("[{}]{}".format(general_type, stuff))
-                                    else:
-                                        interface.output_text("[{}] {}".format(general_type, stuff))
+                                if stuff.startswith('['):
+                                    interface.output_text("[{}]{}".format(general_type, stuff))
+                                else:
+                                    interface.output_text("[{}] {}".format(general_type, stuff))
                             elif isinstance(stuff, dict):
                                 for specific_type, text_list in stuff.items():
                                     if len(text_list):
                                         if isinstance(text_list, list):
                                             for text in text_list:
-                                                if text.startswith('['):
+                                                if general_type == 'messages' \
+                                                        and specific_type == 'results' \
+                                                        and autocompletion.is_definition(text):
+                                                    asyncio.ensure_future(autocompletion.load_definition(text))
+                                                elif text.startswith('['):
                                                     interface.output_text("[{}][{}]{}".format(
                                                         general_type, specific_type, text))
                                                 else:
                                                     interface.output_text("[{}][{}] {}".format(
                                                         general_type, specific_type, text))
                                         else:
-                                            if isinstance(text_list, str) and text_list.startswith('['):
+                                            if isinstance(text_list, str) and general_type == 'messages' \
+                                                    and specific_type == 'results' \
+                                                    and autocompletion.is_definition(text_list):
+                                                asyncio.ensure_future(autocompletion.load_definition(text_list))
+                                            elif isinstance(text_list, str) and text_list.startswith('['):
                                                 interface.output_text("[{}][{}]{}".format(
                                                     general_type, specific_type, text_list))
                                             else:
@@ -171,4 +181,5 @@ class ActiveConnection:
 
     async def close(self):
         self._done = True
-        await self._connection.close()
+        if self._connection:
+            await self._connection.close()

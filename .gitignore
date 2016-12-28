@@ -101,7 +101,7 @@ env
 *.pot
 docs/_build/
 console.json
-
+.autocomplete_data.json
 
 # Unit test / coverage reports #
 ################################
