@@ -4,6 +4,7 @@ from time import strftime
 
 from spc import autocompletion
 
+_input_loop_running = None
 
 def output_text(text):
     print('\r  {}'.format(' ' * len(readline.get_line_buffer())), end='\r', flush=True)
@@ -11,7 +12,10 @@ def output_text(text):
         print(strftime('[%m-%d %H:%M %S]'), text.strip(), sep='')
     else:
         print(strftime('[%m-%d %H:%M %S]'), text.strip())
-    print('> {}'.format(readline.get_line_buffer()), end='', flush=True)
+    if _input_loop_running is not None and _input_loop_running.is_set():
+        print('> {}'.format(readline.get_line_buffer()), end='', flush=True)
+    else:
+        print('{}'.format(readline.get_line_buffer()), end='', flush=True)
 
 
 def _completion(word, state):
@@ -32,6 +36,13 @@ async def input_loop(loop, connection):
     :type loop: asyncio.events.AbstractEventLoop
     :type connection: spc.communication.ActiveConnection
     """
-    while True:
-        result = await loop.run_in_executor(None, input, '> ')
-        asyncio.ensure_future(connection.send_command(result.strip()), loop=loop)
+    global _input_loop_running
+    if _input_loop_running is None:
+        _input_loop_running = asyncio.Event(loop=loop)
+    _input_loop_running.set()
+    try:
+        while True:
+            result = await loop.run_in_executor(None, input, '> ')
+            asyncio.ensure_future(connection.send_command(result.strip()), loop=loop)
+    finally:
+        _input_loop_running.clear()
