@@ -55,14 +55,14 @@ class ActiveConnection:
                 message = await self._connection.recv()
             except websockets.exceptions.ConnectionClosed:
                 if self._done:
-                    interface.output_text("Connection closed.")
+                    interface.output_text("Connection closed.", False)
                 else:
-                    interface.output_text("Reconnecting.")
+                    interface.output_text("Reconnecting.", False)
                     asyncio.ensure_future(self.connect)
                 break
             if message.startswith('auth ok '):
                 await self._connection.send('subscribe user:{}/console'.format(self._user_id))
-                interface.output_text("Subscribed successfully.")
+                interface.output_text("Connected.", False)
                 self._ready = True
                 asyncio.ensure_future(self._send_queued_commands(), loop=self._loop)
                 continue
@@ -70,7 +70,10 @@ class ActiveConnection:
                 try:
                     message_json = json.loads(message)
                 except ValueError:
-                    interface.output_text("Unknown message: {}".format(message))
+                    if not isinstance(message, str) or (not message.startswith('time ')
+                                                        and not message.startswith('protocol ')
+                                                        and not message.startswith('package ')):
+                        interface.output_text("Unknown message: {}".format(message))
                     continue
                 else:
                     if len(message_json) != 2:

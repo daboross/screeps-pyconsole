@@ -6,12 +6,13 @@ from spc import autocompletion
 
 _input_loop_running = None
 
-def output_text(text):
+
+def output_text(text, date=True):
     print('\r  {}'.format(' ' * len(readline.get_line_buffer())), end='\r', flush=True)
-    if text.startswith('['):
-        print(strftime('[%m-%d %H:%M %S]'), text.strip(), sep='')
+    if date:
+        print(strftime('[%m-%d %H:%M]'), text.strip())
     else:
-        print(strftime('[%m-%d %H:%M %S]'), text.strip())
+        print(text.strip())
     if _input_loop_running is not None and _input_loop_running.is_set():
         print('> {}'.format(readline.get_line_buffer()), end='', flush=True)
     else:
