@@ -53,12 +53,12 @@ class ActiveConnection:
         while True:
             try:
                 message = await self._connection.recv()
-            except websockets.exceptions.ConnectionClosed:
+            except (websockets.exceptions.InvalidState, websockets.exceptions.InvalidHandshake, ConnectionError):
                 if self._done:
                     interface.output_text("Connection closed.", False)
                 else:
                     interface.output_text("Reconnecting.", False)
-                    asyncio.ensure_future(self.connect)
+                    asyncio.ensure_future(self.connect())
                 break
             if message.startswith('auth ok '):
                 await self._connection.send('subscribe user:{}/console'.format(self._user_id))
