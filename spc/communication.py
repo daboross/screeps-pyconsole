@@ -36,7 +36,16 @@ class ActiveConnection:
         pass
 
     async def connect(self):
-        self._connection = await websockets.connect(self._ws_url, loop=self._loop)
+        retry = 3
+        while retry > 0:
+            try:
+                self._connection = await websockets.connect(self._ws_url, loop=self._loop)
+            except websockets.exceptions.InvalidHandshake:
+                interface.output_text("Failed to connect, retrying.", False)
+            else:
+                break
+            await asyncio.sleep(3, loop=self._loop)
+            retry -= 1
         if self._connection is None:
             raise ValueError("Failed to initiate websockets connection.")
         if self._done:
@@ -53,12 +62,16 @@ class ActiveConnection:
         while True:
             try:
                 message = await self._connection.recv()
-            except (websockets.exceptions.InvalidState, websockets.exceptions.InvalidHandshake, ConnectionError):
+            except (websockets.exceptions.InvalidState, ConnectionError):
                 if self._done:
                     interface.output_text("Connection closed.", False)
                 else:
                     interface.output_text("Reconnecting.", False)
-                    asyncio.ensure_future(self.connect())
+                    async def reconnect():
+                        await self._connection.close()
+                        await asyncio.sleep(3, loop=self._loop)
+                        await self.connect()
+                    asyncio.ensure_future(reconnect(), loop=self._loop)
                 break
             if message.startswith('auth ok '):
                 await self._connection.send('subscribe user:{}/console'.format(self._user_id))
