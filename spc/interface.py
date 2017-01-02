@@ -2,8 +2,6 @@ import asyncio
 import readline
 from time import strftime
 
-from spc import autocompletion
-
 _input_loop_running = None
 
 
@@ -19,20 +17,22 @@ def output_text(text, date=True):
         print('{}'.format(readline.get_line_buffer()), end='', flush=True)
 
 
-def _completion(word, state):
-    matches = autocompletion.completions_for(word)
-    if state < len(matches):
-        return matches[state]
+def _completion(completer):
+    def complete(word, state):
+        matches = completer(word)
+        if state < len(matches):
+            return matches[state]
 
 
-def initialize_readline():
+def initialize_readline(completer):
     readline.parse_and_bind("tab: menu-complete")
     readline.parse_and_bind("\C-space: menu-complete")
 
-    readline.set_completer(_completion)
+    readline.set_completer(_completion(completer))
 
 
-async def input_loop(loop, connection):
+@asyncio.coroutine
+def input_loop(loop, connection):
     """
     :type loop: asyncio.events.AbstractEventLoop
     :type connection: spc.communication.ActiveConnection
@@ -43,7 +43,7 @@ async def input_loop(loop, connection):
     _input_loop_running.set()
     try:
         while True:
-            result = await loop.run_in_executor(None, input, '> ')
+            result = yield from loop.run_in_executor(None, input, '> ')
             asyncio.ensure_future(connection.send_command(result.strip()), loop=loop)
     finally:
         _input_loop_running.clear()

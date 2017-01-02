@@ -4,7 +4,6 @@ import json
 import string
 import time
 import traceback
-from json.decoder import JSONDecodeError
 
 import functools
 import os
@@ -25,8 +24,10 @@ def _group_words_by(words, by):
     return iter(lambda: list(itertools.islice(iterable, by)), [])
 
 
-async def initialize_all(loop, connection):
+@asyncio.coroutine
+def initialize_all(loop, connection):
     """
+    :type loop: asyncio.events.AbstractEventLoop
     :type connection: spc.communication.ActiveConnection
     """
     global _autocomplete_definitions, _now_initializing, _needs_initialization_next, _keyword, _rewake_condition
@@ -34,7 +35,7 @@ async def initialize_all(loop, connection):
     # Load cached data if available and recent enough
     try:
         loaded_definitions = json.load(open('.autocomplete_data.json'))
-    except (FileNotFoundError, ValueError, JSONDecodeError):
+    except (FileNotFoundError, ValueError):
         pass
     else:
         last_updated = loaded_definitions['last_update']
@@ -53,7 +54,8 @@ async def initialize_all(loop, connection):
                                                        + string.digits) for _ in range(5)))
     _rewake_condition = asyncio.Condition(loop=loop)
     while True:
-        async with _rewake_condition:
+        yield from _rewake_condition.acquire()
+        try:
             all_needed_iterate = iter(set(x for x in itertools.chain(_now_initializing, _needs_initialization_next)
                                           if x not in _autocomplete_definitions))
             _now_initializing = set(itertools.islice(all_needed_iterate, 0, 100))
@@ -76,17 +78,21 @@ async def initialize_all(loop, connection):
                 # commands are sent, AND we start watching listening for definitions immediately!
                 wake_up_event = asyncio.Event(loop=loop)
 
-                async def run_stuff_and_timeout(event):
-                    await asyncio.gather(*command_futures, loop=loop)
-                    await asyncio.sleep(60, loop=loop)
+                @asyncio.coroutine
+                def run_stuff_and_timeout(event):
+                    yield from asyncio.gather(*command_futures, loop=loop)
+                    yield from asyncio.sleep(60, loop=loop)
                     event.set()
-                    async with _rewake_condition:
+                    yield from _rewake_condition.acquire()
+                    try:
                         _rewake_condition.notify()
+                    finally:
+                        _rewake_condition.release()
 
-                timeout_future = asyncio.ensure_future(run_stuff_and_timeout(wake_up_event))
-                await _rewake_condition.wait_for(lambda: wake_up_event.is_set() or len(_now_initializing) < 20)
+                timeout_future = asyncio.ensure_future(run_stuff_and_timeout(wake_up_event), loop=loop)
+                yield from _rewake_condition.wait_for(lambda: wake_up_event.is_set() or len(_now_initializing) < 20)
                 if len(_now_initializing):
-                    await asyncio.sleep(5, loop=loop)
+                    yield from asyncio.sleep(5, loop=loop)
                 timeout_future.cancel()
             else:
                 _keyword = ''
@@ -94,7 +100,12 @@ async def initialize_all(loop, connection):
                 _needs_initialization_next = None
                 _rewake_condition = None
                 break
+        finally:
+            _rewake_condition.release()
 
+    # See http://stackoverflow.com/q/41421487/1907543 (PyCharm incorrectly detects this as unreachable due to a while
+    #  loop with the break condition with a try/finally block)
+    # noinspection PyUnreachableCode
     interface.output_text("Finished loading autocompletion data - saving to .autocomplete_data.json.")
     to_save = dict(**_autocomplete_definitions)
     to_save['last_update'] = round(time.time())
@@ -110,8 +121,12 @@ def is_definition(message):
     return bool(_keyword) and message.lstrip().startswith(_keyword)
 
 
-async def load_definition(text):
-    """:type text: str"""
+@asyncio.coroutine
+def load_definition(loop, text):
+    """
+    :type loop: asyncio.events.AbstractEventLoop
+    :type text: str
+    """
     if not _keyword:
         return
     text = text.strip()
@@ -119,7 +134,7 @@ async def load_definition(text):
         raise ValueError("Invalid text to load")
     if '\n' in text:
         for part in text.split('\n'):
-            asyncio.ensure_future(load_definition(part))
+            asyncio.ensure_future(load_definition(loop, part))
         return
 
     name, value = text[len(_keyword):].split('=', 1)
@@ -127,10 +142,12 @@ async def load_definition(text):
     # TODO: this is completely trusting the server to only send what we expect.
     try:
         completions = json.loads(value)
-    except (ValueError, JSONDecodeError) as e:
+    except ValueError as e:
         interface.output_text('Failed to decode autocomplete data response! (data: `{}`, error: `{}`)'.format(value, e))
         return
-    async with _rewake_condition:
+
+    yield from _rewake_condition.acquire()
+    try:
         _autocomplete_definitions[name] = completions
         # TODO: add support for more 'deep' autocomplete through prototype detection
         # As it stands, we technically _could_ allow for more deep autocomplete with the current setup, but it would
@@ -144,6 +161,8 @@ async def load_definition(text):
         if name in _now_initializing:
             _now_initializing.remove(name)
         _rewake_condition.notify(1)
+    finally:
+        _rewake_condition.release()
 
 
 @functools.lru_cache()

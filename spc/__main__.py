@@ -3,7 +3,7 @@ import json
 
 from spc import interface, communication, autocompletion
 
-interface.initialize_readline()
+interface.initialize_readline(autocompletion.completions_for)
 
 loop = asyncio.get_event_loop()
 
@@ -14,13 +14,16 @@ connection = communication.ActiveConnection(loop, config['user'], config['passwo
 
 input_loop_future = None
 
-async def start():
+
+@asyncio.coroutine
+def start():
     global loop, config, connection, input_loop_future
 
-    await connection.connect()
+    yield from connection.connect()
     asyncio.ensure_future(autocompletion.initialize_all(loop, connection))
     input_loop_future = asyncio.ensure_future(interface.input_loop(asyncio.get_event_loop(), connection), loop=loop)
-    await input_loop_future
+    yield from input_loop_future
+
 
 try:
     loop.run_until_complete(start())

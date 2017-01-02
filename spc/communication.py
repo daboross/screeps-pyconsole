@@ -35,11 +35,12 @@ class ActiveConnection:
         self._done = False
         pass
 
-    async def connect(self):
+    @asyncio.coroutine
+    def connect(self):
         retry = 3
         while retry > 0 and not self._done:
             try:
-                self._connection = await websockets.connect(self._ws_url, loop=self._loop)
+                self._connection = yield from websockets.connect(self._ws_url, loop=self._loop)
             except websockets.exceptions.InvalidHandshake:
                 pass
             else:
@@ -48,7 +49,7 @@ class ActiveConnection:
 
             interface.output_text("Failed to connect, retrying.", False)
             retry -= 1
-            await asyncio.sleep(3, loop=self._loop)
+            yield from asyncio.sleep(3, loop=self._loop)
 
         if self._done:
             if self._connection is not None:
@@ -56,31 +57,33 @@ class ActiveConnection:
             return
 
         if self._token is None:
-            await self._login()
+            yield from self._login()
 
-        await self._connection.send('auth {}'.format(self._token))
+        yield from self._connection.send('auth {}'.format(self._token))
         asyncio.ensure_future(self.recv_loop(), loop=self._loop)
 
-    async def recv_loop(self):
+    @asyncio.coroutine
+    def recv_loop(self):
         while True:
             try:
-                message = await self._connection.recv()
+                message = yield from self._connection.recv()
             except (websockets.exceptions.InvalidState, ConnectionError):
                 if self._done:
                     interface.output_text("Connection closed.", False)
                 else:
                     interface.output_text("Reconnecting.", False)
 
-                    async def reconnect():
-                        await self._connection.close()
+                    @asyncio.coroutine
+                    def reconnect():
+                        yield from self._connection.close()
                         self._connection = None
-                        await asyncio.sleep(3, loop=self._loop)
-                        await self.connect()
+                        yield from asyncio.sleep(3, loop=self._loop)
+                        yield from self.connect()
 
                     asyncio.ensure_future(reconnect(), loop=self._loop)
                 break
             if message.startswith('auth ok '):
-                await self._connection.send('subscribe user:{}/console'.format(self._user_id))
+                yield from self._connection.send('subscribe user:{}/console'.format(self._user_id))
                 interface.output_text("Connected.", False)
                 self._ready = True
                 asyncio.ensure_future(self._send_queued_commands(), loop=self._loop)
@@ -113,7 +116,8 @@ class ActiveConnection:
                                                 if general_type == 'messages' \
                                                         and specific_type == 'results' \
                                                         and autocompletion.is_definition(text):
-                                                    asyncio.ensure_future(autocompletion.load_definition(text))
+                                                    asyncio.ensure_future(
+                                                        autocompletion.load_definition(self._loop, text))
                                                 elif text.startswith('['):
                                                     interface.output_text("[{}][{}]{}".format(
                                                         general_type, specific_type, text))
@@ -124,7 +128,8 @@ class ActiveConnection:
                                             if isinstance(text_list, str) and general_type == 'messages' \
                                                     and specific_type == 'results' \
                                                     and autocompletion.is_definition(text_list):
-                                                asyncio.ensure_future(autocompletion.load_definition(text_list))
+                                                asyncio.ensure_future(
+                                                    autocompletion.load_definition(self._loop, text_list))
                                             elif isinstance(text_list, str) and text_list.startswith('['):
                                                 interface.output_text("[{}][{}]{}".format(
                                                     general_type, specific_type, text_list))
@@ -134,14 +139,18 @@ class ActiveConnection:
                             else:
                                 interface.output_text("[{}][???] {}".format(general_type, stuff))
 
-    async def _send_queued_commands(self):
+    @asyncio.coroutine
+    def _send_queued_commands(self):
         if self._queued_commands is not None:
+            futures = []
             for text in self._queued_commands:
-                await self._send_command_call(text)
+                futures.append(self._send_command_call(text))
             self._queued_commands = None
+            yield from asyncio.gather(*futures, loop=self._loop)
 
-    async def _login(self):
-        login_result = await self._loop.run_in_executor(None, functools.partial(
+    @asyncio.coroutine
+    def _login(self):
+        login_result = yield from self._loop.run_in_executor(None, functools.partial(
             requests.post,
             self._api_url + '/auth/signin',
             json={'email': self._username, 'password': self._password}
@@ -151,7 +160,7 @@ class ActiveConnection:
         if not login_json.get('ok') or not login_json.get('token'):
             raise ValueError("Non-OK result from logging in: {}".format(login_json))
         self._token = login_result.json()['token']
-        info_result = await self._loop.run_in_executor(None, functools.partial(
+        info_result = yield from self._loop.run_in_executor(None, functools.partial(
             requests.get,
             self._api_url + '/auth/me',
             headers={'X-Username': self._token, 'X-Token': self._token}
@@ -164,7 +173,8 @@ class ActiveConnection:
         if 'X-Token' in info_result.headers:
             self._token = info_result.headers['X-Token']
 
-    async def send_command(self, text):
+    @asyncio.coroutine
+    def send_command(self, text):
         if not self._ready:
             if self._queued_commands:
                 self._queued_commands.append(text)
@@ -174,10 +184,11 @@ class ActiveConnection:
             if text.startswith('.'):
                 self._connection.send(text[1:])
             else:
-                await self._send_command_call(text)
+                yield from self._send_command_call(text)
 
-    async def _send_command_call(self, text, retry=3):
-        result = await self._loop.run_in_executor(None, functools.partial(
+    @asyncio.coroutine
+    def _send_command_call(self, text, retry=3):
+        result = yield from self._loop.run_in_executor(None, functools.partial(
             requests.post,
             self._api_url + '/user/console',
             headers={'X-Username': self._token, 'X-Token': self._token},
@@ -187,8 +198,8 @@ class ActiveConnection:
         if not result.ok:
             result_json = result.json()
             if result_json and result_json.get('error') == 'unauthorized' and retry > 0:
-                await self._login()
-                return await self._send_command_call(text, retry=retry - 1)
+                yield from self._login()
+                return (yield from self._send_command_call(text, retry=retry - 1))
             interface.output_text("failed to send command: {} {}:\n{}".format(result.status_code,
                                                                               result.reason, result.text))
             return
@@ -197,12 +208,13 @@ class ActiveConnection:
             self._token = result.headers['X-Token']
         if not result_json.get('ok'):
             if result_json.get('error') == 'unauthorized' and retry > 0:
-                await self._login()
-                await self._send_command_call(text, retry=retry - 1)
+                yield from self._login()
+                yield from self._send_command_call(text, retry=retry - 1)
             interface.output_text("failed to send command: non-OK result:\n{}".format(result_json))
 
-    async def close(self):
+    @asyncio.coroutine
+    def close(self):
         self._done = True
         if self._connection:
-            await self._connection.close()
+            yield from self._connection.close()
             self._connection = None
