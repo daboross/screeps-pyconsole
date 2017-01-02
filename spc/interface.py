@@ -1,8 +1,12 @@
 import asyncio
 import readline
+from asyncio.tasks import FIRST_COMPLETED
 from time import strftime
 
+import signal
+
 _input_loop_running = None
+_exit_required = None
 
 
 def output_text(text, date=True):
@@ -31,6 +35,22 @@ def initialize_readline(completer):
     readline.set_completer(_completion(completer))
 
 
+def initialize_signal_handlers(loop):
+    """
+    :type loop: asyncio.events.AbstractEventLoop
+    """
+    global _exit_required
+    _exit_required = asyncio.Event(loop=loop)
+
+    def handler():
+        loop.call_soon_threadsafe(_exit_required.set)
+        loop.remove_signal_handler(signal.SIGINT)
+        loop.remove_signal_handler(signal.SIGTERM)
+
+    loop.add_signal_handler(signal.SIGINT, handler)
+    loop.add_signal_handler(signal.SIGTERM, handler)
+
+
 @asyncio.coroutine
 def input_loop(loop, connection):
     """
@@ -43,7 +63,21 @@ def input_loop(loop, connection):
     _input_loop_running.set()
     try:
         while True:
-            result = yield from loop.run_in_executor(None, input, '> ')
+            done, pending = yield from asyncio.wait([
+                loop.run_in_executor(None, input, '> '),
+                _exit_required.wait()
+            ], loop=loop, return_when=FIRST_COMPLETED)
+            for x in pending:
+                x.cancel()
+            done = [x.result() for x in done]
+            if True in done:
+                # only _exit_required.wait() returns something that equals True.
+                # input will only ever return strings.
+                return
+            else:
+                result = done[0]
             asyncio.ensure_future(connection.send_command(result.strip()), loop=loop)
+    except (EOFError, KeyboardInterrupt):
+        return
     finally:
         _input_loop_running.clear()

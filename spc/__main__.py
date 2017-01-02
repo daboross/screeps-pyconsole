@@ -1,6 +1,8 @@
 import asyncio
 import json
 
+import os
+
 from spc import interface, communication, autocompletion
 
 interface.initialize_readline(autocompletion.completions_for)
@@ -12,22 +14,20 @@ config = json.load(open('console.json'))
 connection = communication.ActiveConnection(loop, config['user'], config['password'],
                                             config.get('ws_url'), config.get('api_url'))
 
-input_loop_future = None
-
 
 @asyncio.coroutine
 def start():
-    global loop, config, connection, input_loop_future
-
     yield from connection.connect()
-    asyncio.ensure_future(autocompletion.initialize_all(loop, connection))
-    input_loop_future = asyncio.ensure_future(interface.input_loop(asyncio.get_event_loop(), connection), loop=loop)
-    yield from input_loop_future
+    interface.initialize_signal_handlers(loop)
+    yield from asyncio.gather(
+        interface.input_loop(loop, connection),
+        autocompletion.initialize_all(loop, connection),
+        loop=loop
+    )
 
 
-try:
-    loop.run_until_complete(start())
-except (EOFError, KeyboardInterrupt):
-    if input_loop_future and not input_loop_future.cancelled():
-        input_loop_future.cancel()
-    loop.run_until_complete(connection.close())
+main_task = asyncio.ensure_future(start())
+loop.run_until_complete(main_task)
+loop.run_until_complete(connection.close())
+loop.close()
+os._exit(0)
