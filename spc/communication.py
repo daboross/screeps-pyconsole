@@ -53,7 +53,7 @@ class ActiveConnection:
 
         if self._done:
             if self._connection is not None:
-                self._connection.close()
+                yield from self.close(True)
             return
 
         if self._token is None:
@@ -75,19 +75,24 @@ class ActiveConnection:
 
                     @asyncio.coroutine
                     def reconnect():
-                        yield from self._connection.close()
-                        self._connection = None
+                        yield from self.close(True)
                         yield from asyncio.sleep(3, loop=self._loop)
                         yield from self.connect()
 
                     asyncio.ensure_future(reconnect(), loop=self._loop)
                 break
-            if message.startswith('auth ok '):
+            if message.startswith('auth ok'):
                 yield from self._connection.send('subscribe user:{}/console'.format(self._user_id))
                 interface.output_text("Connected.", False)
                 self._ready = True
                 asyncio.ensure_future(self._send_queued_commands(), loop=self._loop)
                 continue
+            elif message.startswith('auth failed'):
+                self._ready = False
+                yield from self._connection.close()
+                yield from self._login()
+                yield from self.connect()
+                return
             else:
                 try:
                     message_json = json.loads(message)
@@ -175,6 +180,8 @@ class ActiveConnection:
 
     @asyncio.coroutine
     def send_command(self, text):
+        if self._done:
+            return
         if not self._ready:
             if self._queued_commands:
                 self._queued_commands.append(text)
@@ -188,20 +195,24 @@ class ActiveConnection:
 
     @asyncio.coroutine
     def _send_command_call(self, text, retry=3):
-        result = yield from self._loop.run_in_executor(None, functools.partial(
-            requests.post,
-            self._api_url + '/user/console',
-            headers={'X-Username': self._token, 'X-Token': self._token},
-            json={'expression': text}
-        ))
-        assert isinstance(result, requests.Response)
+        try:
+            result = yield from self._loop.run_in_executor(None, functools.partial(
+                requests.post,
+                self._api_url + '/user/console',
+                headers={'X-Username': self._token, 'X-Token': self._token},
+                json={'expression': text}
+            ))
+        except ConnectionError as e:
+            interface.output_text("Failed to send command: {}".format(
+                e), False)
+            return
         if not result.ok:
             result_json = result.json()
             if result_json and result_json.get('error') == 'unauthorized' and retry > 0:
                 yield from self._login()
                 return (yield from self._send_command_call(text, retry=retry - 1))
-            interface.output_text("failed to send command: {} {}:\n{}".format(result.status_code,
-                                                                              result.reason, result.text))
+            interface.output_text("Failed to send command: HTTP Error {}: {}:\n{}".format(
+                result.status_code, result.reason, result.text), False)
             return
         result_json = result.json()
         if 'X-Token' in result.headers:
@@ -210,11 +221,16 @@ class ActiveConnection:
             if result_json.get('error') == 'unauthorized' and retry > 0:
                 yield from self._login()
                 yield from self._send_command_call(text, retry=retry - 1)
-            interface.output_text("failed to send command: non-OK result:\n{}".format(result_json))
+            interface.output_text("Failed to send command: non-OK result:\n{}".format(
+                result_json), False)
 
     @asyncio.coroutine
-    def close(self):
-        self._done = True
+    def close(self, reconnecting_already=False):
+        if not reconnecting_already:
+            self._done = True
         if self._connection:
-            yield from self._connection.close()
+            try:
+                yield from self._connection.close()
+            except ConnectionError:
+                pass
             self._connection = None

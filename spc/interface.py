@@ -26,7 +26,7 @@ def _completion(completer):
         matches = completer(word)
         if state < len(matches):
             return matches[state]
-
+    return complete
 
 def initialize_readline(completer):
     readline.parse_and_bind("tab: menu-complete")
@@ -42,7 +42,7 @@ def initialize_signal_handlers(loop):
     global _exit_required
     _exit_required = asyncio.Event(loop=loop)
 
-    def handler():
+    def handler(*args):
         loop.call_soon_threadsafe(_exit_required.set)
         loop.remove_signal_handler(signal.SIGINT)
         loop.remove_signal_handler(signal.SIGTERM)
