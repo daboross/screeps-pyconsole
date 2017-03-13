@@ -107,6 +107,7 @@ class ActiveConnection:
                     asyncio.ensure_future(reconnect(), loop=self._loop)
                 break
             if message.startswith('auth ok'):
+                self._token = message[len('auth ok '):]
                 yield from self._connection.send('subscribe user:{}/console'.format(self._user_id))
                 interface.output_text("Connected.", False)
                 self._ready = True
