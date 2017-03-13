@@ -1,14 +1,39 @@
 import asyncio
 import json
 
+import colorama
 import functools
+import re
 import requests
 import websockets
 
-from spc import interface, autocompletion
+from spc import autocompletion, interface
 
 DEFAULT_WS_URL = 'wss://screeps.com/socket/websocket'
 DEFAULT_API_URL = 'https://screeps.com/api'
+
+html_script_regex = re.compile('\s*<script>.*</script>\s*', re.IGNORECASE)
+error_regex = re.compile('error', re.IGNORECASE)
+
+def function():
+    pass
+
+def process_received_message(message, source='log'):
+    if source == 'log':
+        if html_script_regex.match(message):
+            return
+        if error_regex.search(message):
+            interface.output_text(message, color=colorama.Fore.RED)
+        else:
+            interface.output_text(message)
+    elif source == 'results':
+        if html_script_regex.match(message):
+            return
+        interface.output_text(message, date=False)
+    elif source == 'error':
+        interface.output_text('[error!] ' + message, color=colorama.Fore.RED)
+    else:
+        interface.output_text("[unknown type! {}]".format(source, message), color=colorama.Fore.RED)
 
 
 class ActiveConnection:
@@ -109,40 +134,37 @@ class ActiveConnection:
                         # TODO: abstract out this monstrosity
                         for general_type, stuff in message_json[1].items():
                             if isinstance(stuff, str):
-                                if stuff.startswith('['):
-                                    interface.output_text("[{}]{}".format(general_type, stuff))
-                                else:
-                                    interface.output_text("[{}] {}".format(general_type, stuff))
+                                process_received_message(stuff, general_type)
                             elif isinstance(stuff, dict):
                                 for specific_type, text_list in stuff.items():
                                     if len(text_list):
                                         if isinstance(text_list, list):
                                             for text in text_list:
                                                 if general_type == 'messages' \
-                                                        and specific_type == 'results' \
-                                                        and autocompletion.is_definition(text):
-                                                    asyncio.ensure_future(
-                                                        autocompletion.load_definition(self._loop, text))
-                                                elif text.startswith('['):
-                                                    interface.output_text("[{}][{}]{}".format(
-                                                        general_type, specific_type, text))
+                                                        and specific_type == 'results':
+                                                    if autocompletion.is_definition(text):
+                                                        asyncio.ensure_future(
+                                                            autocompletion.load_definition(self._loop, text))
+                                                    else:
+                                                        process_received_message(text, 'results')
+                                                elif general_type == 'messages' and specific_type == 'log':
+                                                    process_received_message(text)
                                                 else:
-                                                    interface.output_text("[{}][{}] {}".format(
-                                                        general_type, specific_type, text))
+                                                    process_received_message(text, specific_type)
                                         else:
                                             if isinstance(text_list, str) and general_type == 'messages' \
-                                                    and specific_type == 'results' \
-                                                    and autocompletion.is_definition(text_list):
-                                                asyncio.ensure_future(
-                                                    autocompletion.load_definition(self._loop, text_list))
-                                            elif isinstance(text_list, str) and text_list.startswith('['):
-                                                interface.output_text("[{}][{}]{}".format(
-                                                    general_type, specific_type, text_list))
+                                                    and specific_type == 'results':
+                                                if autocompletion.is_definition(text_list):
+                                                    asyncio.ensure_future(
+                                                        autocompletion.load_definition(self._loop, text_list))
+                                                else:
+                                                    process_received_message(text_list, 'results')
+                                            elif general_type == 'messages' and specific_type == 'log':
+                                                process_received_message(str(text_list))
                                             else:
-                                                interface.output_text("[{}][{}] {}".format(
-                                                    general_type, specific_type, text_list))
+                                                process_received_message(str(text_list), specific_type)
                             else:
-                                interface.output_text("[{}][???] {}".format(general_type, stuff))
+                                process_received_message(str(stuff), general_type)
 
     @asyncio.coroutine
     def _send_queued_commands(self):

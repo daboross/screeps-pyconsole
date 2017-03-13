@@ -3,22 +3,26 @@ import readline
 from asyncio.tasks import FIRST_COMPLETED
 from time import strftime
 
+import colorama
 import signal
 
 _input_loop_running = None
 _exit_required = None
 
 
-def output_text(text, date=True):
+
+def output_text(text, date=True, color=colorama.Fore.RESET):
     print('\r  {}'.format(' ' * len(readline.get_line_buffer())), end='\r', flush=True)
     if date:
-        print(strftime('[%m-%d %H:%M]'), text.strip())
+        print(color + strftime('[%m-%d %H:%M]'), text.strip())
     else:
-        print(text.strip())
+        print(color + text)
     if _input_loop_running is not None and _input_loop_running.is_set():
-        print('> {}'.format(readline.get_line_buffer()), end='', flush=True)
+        print(colorama.Fore.RESET + '> {}'.format(readline.get_line_buffer()), end='', flush=True)
     else:
         print('{}'.format(readline.get_line_buffer()), end='', flush=True)
+    readline.insert_text('')
+    readline.redisplay()
 
 
 def _completion(completer):
@@ -26,9 +30,12 @@ def _completion(completer):
         matches = completer(word)
         if state < len(matches):
             return matches[state]
+
     return complete
 
+
 def initialize_readline(completer):
+    colorama.init()
     readline.parse_and_bind("tab: menu-complete")
     readline.parse_and_bind("\C-space: menu-complete")
 
@@ -63,6 +70,7 @@ def input_loop(loop, connection):
     _input_loop_running.set()
     try:
         while True:
+            print(colorama.Fore.RESET, end='')
             done, pending = yield from asyncio.wait([
                 loop.run_in_executor(None, input, '> '),
                 _exit_required.wait()
