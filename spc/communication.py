@@ -114,7 +114,9 @@ class ActiveConnection:
                 asyncio.ensure_future(self._send_queued_commands(), loop=self._loop)
                 continue
             elif message.startswith('auth failed'):
+                print("authentication failed.")
                 self._ready = False
+                self._token = None
                 yield from self._connection.close()
                 yield from self._login()
                 yield from self.connect()
@@ -198,7 +200,7 @@ class ActiveConnection:
         if not info_json.get('ok') or not info_json.get('_id'):
             raise ValueError("Non-OK result from getting user info: {}".format(info_json))
         self._user_id = info_json['_id']
-        if 'X-Token' in info_result.headers:
+        if 'X-Token' in info_result.headers and len(info_result.headers['X-Token']) > 0:
             self._token = info_result.headers['X-Token']
 
     @asyncio.coroutine
@@ -238,7 +240,7 @@ class ActiveConnection:
                 result.status_code, result.reason, result.text), False)
             return
         result_json = result.json()
-        if 'X-Token' in result.headers:
+        if 'X-Token' in result.headers and len(result.headers['X-Token']) > 0:
             self._token = result.headers['X-Token']
         if not result_json.get('ok'):
             if result_json.get('error') == 'unauthorized' and retry > 0:
