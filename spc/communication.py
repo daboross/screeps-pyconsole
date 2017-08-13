@@ -32,7 +32,7 @@ def process_received_message(message, source='log'):
         interface.output_text(message, date=False)
     elif source == 'error':
         interface.output_text('[error!] ' + message, color=colorama.Fore.RED)
-    else:
+    elif source != 'shard':
         interface.output_text("[unknown type! {}]".format(source, message), color=colorama.Fore.RED)
 
 
